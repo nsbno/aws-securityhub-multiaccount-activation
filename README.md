@@ -5,5 +5,4 @@ The python script source has been gotten from awslabs/aws-securityhub-multiaccou
 - It runs on AWS **Lambda-Function**
 - The member's list which is in csv format woud be also got from a **S3 bucket**.
 
-An infrastructure as code using both terraform and cloudformation has been implemented for it under the following repo:
-https://github.com/nsbno/terraform-aws-securityhub
+An infrastructure as code using cloudformation has been implemented for deploying it on AWS.

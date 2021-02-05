@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SecurityHub Master Account
+
+Parameters:
+  AdministratorAccountId:
+    Type: String
+    Description: AWS Account Id of the administrator/Master account.
+Resources:
+####AWSConfig#####
+  ConfigRule: 
+    Type: AWS::Config::ConfigRule
+    Properties: 
+      ConfigRuleName: !Sub "${AWS::StackName}-config-rule"
+      Source: 
+        Owner: AWS
+        SourceIdentifier: "S3_BUCKET_VERSIONING_ENABLED"
+    DependsOn:
+      - ConfigRecorder  
+  ConfigRecorder: 
+    Type: AWS::Config::ConfigurationRecorder
+    Properties: 
+      Name: default
+      RoleARN: 
+        Fn::GetAtt: 
+          - ConfigRole
+          - Arn    
+  ConfigRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      PermissionsBoundary: !Sub arn:aws:iam::${AdministratorAccountId}:policy/LimitTerraform
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - config.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSConfigRole"
+      Policies:
+        - PolicyName: 'awsconfig-delivery'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - s3:*
+                Effect: "Allow"
+                Resource:
+                  - { "Fn::GetAtt": [ "ConfigBucket", "Arn" ] }
+                  - { "Fn::Join": [ "", [ { "Fn::GetAtt": [ "ConfigBucket", "Arn" ] }, "/", "*" ] ] }                       
+      RoleName: !Sub "${AWS::StackName}-ConfigRole"          
+  DeliveryChannel: 
+    Type: AWS::Config::DeliveryChannel
+    Properties: 
+      S3BucketName: 
+        Ref: ConfigBucket
+    DependsOn:
+      - ConfigRole    
+  ConfigBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-vylogging-configbucket"
+##### SecurityHub #####      
+  SecurityHub:
+    Type: AWS::SecurityHub::Hub
+    Properties: 
+      Tags:
+        Account: Master
+##### CloudWatchEvent #####        
+  EventRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "EventRule"
+      EventPattern: 
+        source: 
+          - "aws.securityhub"
+        detail-type: 
+          - "Security Hub Findings - Imported" 
+        detail:
+          findings: 
+            WorkflowState:
+              - "NEW" 
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "LambdaFunction"
+              - "Arn"
+          Id: "TargetFunctionV1"
+##### Lambda Function #####  
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      PermissionsBoundary: arn:aws:iam::${AdministratorAccountId}:policy/LimitTerraform
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: ['sts:AssumeRole']
+            Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+      Path: "/"
+      Policies:
+        - PolicyName: 'AllowCloudWatchWrite'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: "Allow"
+                Resource:
+                  Fn::Join:
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - Ref: AWS::Region
+                      - ':'
+                      - Ref: AWS::AccountId
+                      - ':log-group:/aws/lambda/securityhub-Lambda_Findings_Notification:*'    
+      RoleName: LambdaExe-Findings-Notification        
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:     
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import logging
+          import os
+          from base64 import b64decode
+          from urllib.request import Request, urlopen
+          from urllib.error import URLError, HTTPError
+
+          HOOK_URL = os.environ['HookUrl']
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          
+          def lambda_handler(event, context):
+              logger.info("Event: " + str(event))
+              msg = str(event["detail"])
+              print(msg)
+              # finding            = msg.findings[0].Types[0]
+              finding = str(event["detail"]["findings"][0]["Types"][0])
+              print('Printing output!\n')
+              print(finding)
+              findingDescription = str(event["detail"]["findings"][0]["Description"])
+              findingTime        = str(event["detail"]["findings"][0]["UpdatedAt"])
+              account            =  str(event["detail"]["findings"][0]["AwsAccountId"])
+              region             = str(event["detail"]["findings"][0]["Resources"][0]["Region"])
+              typ                = str(event["detail"]["findings"][0]["Resources"][0]["Type"])
+              color              = '#7CD197'
+              severity = event["detail"]["findings"][0]["Severity"]["Normalized"]
+              print (severity)
+              if (event["detail"]["findings"][0]["Severity"]["Normalized"] >= 1 and event["detail"]["findings"][0]["Severity"]["Normalized"] <= 39):
+                severity = 'LOW'
+                color ='#879596'
+              elif (event["detail"]["findings"][0]["Severity"]["Normalized"] >= 40 and event["detail"]["findings"][0]["Severity"]["Normalized"] <= 69):
+                severity = 'MEDIUM'
+                color = '#ed7211'
+              elif (event["detail"]["findings"][0]["Severity"]["Normalized"] >= 70 and event["detail"]["findings"][0]["Severity"]["Normalized"] <= 89):
+                severity = 'HIGH'
+                color = '#ed7211'
+              elif (event["detail"]["findings"][0]["Severity"]["Normalized"] >= 90 and event["detail"]["findings"][0]["Severity"]["Normalized"] <= 100):
+                severity = 'CRITICAL'
+                color = '#ff0209'
+              else:
+                severity = 'INFORMATIONAL'
+                color = '#007cbc'
+              
+              slack_message = {
+                  'attachments': [
+                    { 'text': "*SecurityHub Notification* :unlock: \n - Finding: %s \n - FindingDescription: %s \n - FindingTime: %s \n - Account: %s \n - Region: %s \n - Type: %s \n - Severity: %s " % (finding, findingDescription, findingTime, account, region, typ, severity),
+                      'color': color
+                    }
+                  ]  
+              }
+              req = Request(HOOK_URL, json.dumps(slack_message).encode('utf-8'))
+              try:
+                response = urlopen(req)
+                response.read()
+                logger.info("Message posted to the Slack")
+              except HTTPError as e:
+                logger.error("Request failed: %d %s", e.code, e.reason)
+              except URLError as e:
+                logger.error("Server connection failed: %s", e.reason)
+ 
+      Description: Monitor Lambda Function
+      Handler: 'index.lambda_handler'
+      Role: !GetAtt 
+        - LambdaExecutionRole
+        - Arn
+      Runtime: python3.7  
+      Environment:
+        Variables:
+          HookUrl : "https://hooks.slack.com/services/xxxxxx"
+      FunctionName: !Sub "${AWS::StackName}-Lambda_Findings_Notification"
+    DependsOn:
+      - LambdaExecutionRole
+  PermissionForEventsToInvokeLambda: 
+    DependsOn: LambdaFunction
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "LambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "EventRule"
+          - "Arn"      
+Outputs:
+  HubArn:
+    Value: !Ref SecurityHub  
+  LambdaFunctionArn:
+    Description: The Arn of Lambda Function
+    Value: !GetAtt LambdaFunction.Arn  

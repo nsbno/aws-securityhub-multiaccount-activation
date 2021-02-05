@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Creates a new role to allow an administrator account to enable and manage SecurityHub and a role to execute lambda function. It also creates a lambda function which will activate securityhub.
+
+Parameters:
+  AdministratorAccountId:
+    Type: String
+    Description: AWS Account Id of the administrator account (the account in which will recieve SecurityHub findings from member accounts).
+Resources:
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ManageSecurityHub
+      PermissionsBoundary: !Sub arn:aws:iam::${AdministratorAccountId}:policy/LimitTerraform
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Ref AdministratorAccountId
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: ManageSecurityHub
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "iam:CreateServiceLinkedRole"
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    "iam:AWSServiceName": 
+                      - "securityhub.amazonaws.com"
+                      - "config.amazonaws.com"
+              - Effect: Allow
+                Action: "securityhub:*"
+                Resource: "*"
+              - Effect: Allow
+                Action: 
+                  - config:DescribeConfigurationRecorders
+                  - config:DescribeDeliveryChannels
+                  - config:DescribeConfigurationRecorderStatus
+                  - config:DeleteConfigurationRecorder
+                  - config:DeleteDeliveryChannel
+                  - config:PutConfigurationRecorder
+                  - config:PutDeliveryChannel
+                  - config:StartConfigurationRecorder
+                Resource: "*"
+              - Effect: "Allow"
+                Action: "iam:PassRole"
+                Resource: "arn:aws:iam::*:role/aws-service-role/config.amazonaws.com/AWSServiceRoleForConfig"
+              - Effect: "Allow"
+                Action:
+                  - "s3:CreateBucket"
+                  - "s3:PutBucketPolicy"
+                  - "s3:ListBucket"
+                Resource: "arn:aws:s3:::config-bucket-*"
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaExe-Enable-SecurityHub
+      PermissionsBoundary: !Sub arn:aws:iam::${AdministratorAccountId}:policy/LimitTerraform
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: LambdaGetBucket
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "s3:ListBucket"
+                Resource: 
+                  - "arn:aws:s3:::securityhub-members-list"
+                  - "arn:aws:s3:::enable-securityhub-lambdafunction"
+              - Effect: Allow
+                Action: "s3:GetObject"
+                Resource: 
+                  - "arn:aws:s3:::securityhub-members-list/*"   
+                  - "arn:aws:s3:::enable-securityhub-lambdafunction/*"
+
+        - PolicyName: LambdaExe
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: "sts:AssumeRole"
+                Resource: "arn:aws:iam::*:role/ManageSecurityHub" 
+              - Effect: Allow
+                Action: "logs:CreateLogGroup"
+                Resource: !Sub "arn:aws:logs:eu-west-1:${AdministratorAccountId}:*"
+              - Effect: Allow
+                Action: 
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:eu-west-1:${AdministratorAccountId}:log-group:/aws/lambda/*"    
+
+  LambdaZipsBucket:
+    Type: AWS::S3::Bucket
+    #DeletionPolicy: Retain
+    Properties:
+      BucketName: enable-securityhub-lambdafunction
+
+  SecurityHubMembersBucket:
+    Type: AWS::S3::Bucket
+    #DeletionPolicy: Retain
+    Properties:
+      BucketName: securityhub-members-list    
+
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:     
+      Code:
+        S3Bucket: !Ref 'LambdaZipsBucket'
+        S3Key: lambda_function.zip
+      Timeout: 900
+      Description: Monitor Lambda Function
+      Handler: 'lambda_function.lambda_handler'
+      Role: !GetAtt 
+        - LambdaExecutionRole
+        - Arn
+      Runtime: python3.7  
+      Environment:
+        Variables:
+          master_account : "yourAWSAccountID"
+          role_name : "ManageSecurityHub"
+          enabled_regions : "eu-west-1"
+          enable_standards : "ruleset/cis-aws-foundations-benchmark/v/1.2.0,standards/aws-foundational-security-best-practices/v/1.0.0"
+      FunctionName: !Sub "${AWS::StackName}-lambda"
+    DependsOn:
+      - LambdaExecutionRole 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
@@ -20,7 +19,6 @@ import boto3
 import sys
 import os
 import time
-import argparse
 import re
 import json
 import csv
@@ -28,7 +26,6 @@ import random
 import string
 import utils
 
-from botocore.client import Config
 from collections import OrderedDict
 from botocore.exceptions import ClientError
 from six.moves import input as raw_input
@@ -103,7 +100,6 @@ def check_config(session,account, region, s3_bucket_name):
     config = session.client('config', region_name=region)
     iam = session.client('iam')
     s3 = session.client('s3', region_name='eu-west-1')
-    print('testconfig:%s' % s3)
     default_bucket_avail = False
     default_bucket_exists = False
     try:
@@ -177,9 +173,6 @@ def check_config(session,account, region, s3_bucket_name):
     return False
 
 
-
-
-
 def lambda_handler(event, context):
 
     ###Getting parameters
@@ -208,11 +201,6 @@ def lambda_handler(event, context):
     
     for line in lines:
       print(line)
-      acid1 = line[0]
-      email1 = line[1]
-      #print(line[0],line[1])
-      print('account1: %s' %(acid1))
-
       if not re.match(r'[0-9]{12}', str(line[0])):
           print("Invalid account number {}, skipping".format(line[0]))
           continue
@@ -306,7 +294,7 @@ def lambda_handler(event, context):
                 sh_client = session.client('securityhub', region_name=aws_region)
                 #Ensure AWS Config is enabled for the account/region and enable if it not already enabled.
                 config_result = check_config(session, account, aws_region, s3_bucket_name)
-                print('test2:%s' % s3_bucket_name)
+                print('config_bucket:%s' % s3_bucket_name)
                 if not config_result:
                     failed_accounts.append({account: "Error validating or enabling AWS Config for account {} in {} - requested standards not enabled".format(account,aws_region)})
                 else:
