@@ -11,3 +11,5 @@ An infrastructure as code using cloudformation has been implemented for deployin
 
  - CloudFormation/MembersRole-Template/cloudformation/securityhub-assume-role-members.yml file would be run on member account in order to give the master account access to enable securityhub.
 
+
+![securityhub-enable-members](https://user-images.githubusercontent.com/21195903/109645192-c9531000-7b56-11eb-89a2-35edcaae2d34.png)
